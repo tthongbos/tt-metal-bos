@@ -1,0 +1,8 @@
+{
+    "layer_params":{
+        "channels": 256,
+        "cell_size": 0.5,
+        "grid_height": 4,
+        "scale": 0.125
+    }
+}
