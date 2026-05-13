@@ -89,6 +89,9 @@ infra/machine_setup/inventory/
 # exclude MNIST etc model downloads
 data/
 hf_data/
+!models/bos_model/oft/reference/oft/data
+*_chay_duoc.py
+*_fixing.py
 
 # exclude venv
 venv/
