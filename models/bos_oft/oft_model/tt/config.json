@@ -1,0 +1,18 @@
+{
+    "cache_path": "/root/.cache/ttnn",
+    "comparison_mode_pcc": 0.9998999834060669,
+    "comparison_mode_should_raise_exception": false,
+    "enable_comparison_mode": false,
+    "enable_detailed_buffer_report": false,
+    "enable_detailed_tensor_report": false,
+    "enable_fast_runtime_mode": true,
+    "enable_graph_report": false,
+    "enable_logging": false,
+    "enable_model_cache": false,
+    "model_cache_path": "/root/.cache/ttnn/models",
+    "report_name": null,
+    "report_path": null,
+    "root_report_path": "generated/ttnn/reports",
+    "throw_exception_on_fallback": false,
+    "tmp_dir": "/tmp/ttnn"
+}
