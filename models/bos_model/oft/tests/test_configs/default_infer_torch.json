@@ -1,0 +1,14 @@
+{
+  "model_path": "/workspace/checkpoint-0600.pth",
+  "gpu": -1,
+
+  "root": "data/kitti",
+  "grid_size": [80.0, 80.0],
+  "yoffset": 1.74,
+  "nms_thresh": 0.4,
+
+  "grid_height": 4.0,
+  "grid_res": 0.5,
+  "frontend": "resnet18",
+  "topdown": 8
+}
