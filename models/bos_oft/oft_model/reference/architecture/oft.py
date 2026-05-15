@@ -34,7 +34,7 @@ class OFT(nn.Module):
         self.dtype = dtype
         self.to(dtype)
 
-    def forward(self, features, calib, grid):
+    def forward(self, features, calib, grid, return_intermediates=False):
         if features.dtype != self.dtype:
             features = features.to(self.dtype)
         if calib.dtype != self.dtype:
@@ -74,19 +74,39 @@ class OFT(nn.Module):
         btm_left = F.grid_sample(integral_img, bbox_corners[..., [0, 3]], align_corners=False)
 
         # Compute voxel features (ignore features which are not visible)
-        vox_feats = (top_left + btm_right - top_right - btm_left) / area
-        vox_feats = vox_feats * visible.to(dtype=self.dtype)
+        rect_sum = top_left + btm_right - top_right - btm_left
+        area_for_div = area.permute(0, 2, 3, 1)
+        vox_avg = rect_sum / area
+        vox_feats = vox_avg * visible.to(dtype=self.dtype)
         # vox_feats = vox_feats.view(batch, -1, depth, width)
         vox_feats = vox_feats.permute(0, 3, 1, 2).flatten(0, 1).flatten(1, 2)
+        vox_feats_flat = vox_feats
 
         # Flatten to orthographic feature map
-        ortho_feats = self.conv3d(vox_feats).view(batch, depth, width, -1)
-        ortho_feats = F.relu(ortho_feats.permute(0, 3, 1, 2), inplace=True)
+        conv3d = self.conv3d(vox_feats_flat).view(batch, depth, width, -1)
+        ortho_feats = F.relu(conv3d.permute(0, 3, 1, 2), inplace=True)
         # ortho_feats = F.relu(self.conv3d(vox_feats))
 
         # Block gradients to pixels which are not visible in the image
-
-        return ortho_feats
+        outs = {}
+        outs["features"] = features
+        outs["corners"] = corners
+        outs["norm_corners"] = norm_corners
+        outs["bbox_corners_pre_flatten"] = bbox_corners.view(batch, self.y_corners.size(0) - 1, depth, width, 4)
+        outs["bbox_corners"] = bbox_corners
+        outs["area"] = area
+        outs["area_for_div"] = area_for_div
+        outs["integral_img"] = integral_img
+        outs["top_left"] = top_left
+        outs["btm_right"] = btm_right
+        outs["top_right"] = top_right
+        outs["btm_left"] = btm_left
+        outs["rect_sum"] = rect_sum
+        outs["vox_avg"] = vox_avg
+        outs["vox_feats_flat"] = vox_feats_flat
+        outs["conv3d"] = conv3d
+        outs["out"] = ortho_feats
+        return ortho_feats, outs
 
 
 def _make_test_grid(batch, depth_corners, width_corners, dtype=torch.float32):

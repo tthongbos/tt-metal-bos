@@ -86,7 +86,6 @@ class BasicBlock(nn.Module):
         out = self.conv1(x)
         if return_intermediates:
             outs["conv1"] = out
-
         out = self.bn1(out)
         if return_intermediates:
             outs["grnorm1"] = out

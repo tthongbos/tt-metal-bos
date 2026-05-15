@@ -51,7 +51,8 @@ class OftNet(nn.Module):
         self.dtype = dtype
         self.to(dtype)
 
-    def forward(self, image, calib, grid):
+    def forward(self, image, calib, grid, return_intermediates=True):
+        out = {}
         if image.dtype != self.dtype:
             image = image.to(self.dtype)
         if calib.dtype != self.dtype:
@@ -60,17 +61,48 @@ class OftNet(nn.Module):
             grid = grid.to(self.dtype)
 
         image = (image - self.mean.view(3, 1, 1)) / self.std.view(3, 1, 1)
-
-        feats8, feats16, feats32, _ = self.frontend.forward_feature_pyramid(image)
-
+        if return_intermediates:
+            out["norm_image"] = image
+        feats8, feats16, feats32, outs = self.frontend.forward_feature_pyramid(image)
+        if return_intermediates:
+            out["feats8"] = feats8
+            out["feats16"] = feats16
+            out["feats32"] = feats32
+            out["layer1_blocks"] = outs.get("layer1_blocks", {})
+            out["layer2_blocks"] = outs.get("layer2_blocks", {})
+            out["layer3_blocks"] = outs.get("layer3_blocks", {})
+            out["layer4_blocks"] = outs.get("layer4_blocks", {})
         lat8 = F.relu(self.bn8(self.lat8(feats8)))
         lat16 = F.relu(self.bn16(self.lat16(feats16)))
         lat32 = F.relu(self.bn32(self.lat32(feats32)))
-
-        ortho = self.oft8(lat8, calib, grid) + self.oft16(lat16, calib, grid) + self.oft32(lat32, calib, grid)
-        topdown = self.topdown(ortho)
+        if return_intermediates:
+            out["lat8"] = lat8
+            out["lat16"] = lat16
+            out["lat32"] = lat32
+        ortho8, oft_outs8 = self.oft8(lat8, calib, grid, return_intermediates=True)
+        ortho16, oft_outs16 = self.oft16(lat16, calib, grid, return_intermediates=True)
+        ortho32, oft_outs32 = self.oft32(lat32, calib, grid, return_intermediates=True)
+        ortho = ortho8 + ortho16 + ortho32
+        if return_intermediates:
+            out["ortho"] = ortho
+            out["oft8"] = oft_outs8
+            out["oft16"] = oft_outs16
+            out["oft32"] = oft_outs32
+            out["ortho8"] = ortho8
+            out["ortho16"] = ortho16
+            out["ortho32"] = ortho32
+        topdown, topdown_outs = self.topdown(ortho, return_intermediates=True)
+        if return_intermediates:
+            out["topdown"] = topdown
+            out["topdown_blocks"] = topdown_outs
 
         batch, _, depth, width = topdown.size()
         outputs = self.head(topdown).view(batch, -1, 9, depth, width)
         scores, pos_offsets, dim_offsets, ang_offsets = torch.split(outputs, [1, 3, 3, 2], dim=2)
+        if return_intermediates:
+            out["scores"] = scores
+            out["pos_offsets"] = pos_offsets
+            out["dim_offsets"] = dim_offsets
+            out["ang_offsets"] = ang_offsets
+            return scores.squeeze(2), pos_offsets, dim_offsets, ang_offsets, out
         return scores.squeeze(2), pos_offsets, dim_offsets, ang_offsets

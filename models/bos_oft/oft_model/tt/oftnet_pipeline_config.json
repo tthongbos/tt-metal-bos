@@ -1,0 +1,15 @@
+{
+  "image_path": "/workspace/turtorial-newbie/model_dev/oft_model/utils/000013.jpg",
+  "calib_path": "/workspace/turtorial-newbie/model_dev/oft_model/utils/000013.txt",
+  "checkpoint_path": "/workspace/turtorial-newbie/model_dev/oft_model/utils/checkpoint/oft_checkpoint-0600.pth",
+  "device_id": 0,
+  "l1_small_size": 32768,
+  "topdown_layers": 8,
+  "grid_res": 0.5,
+  "grid_size": [80.0, 80.0],
+  "grid_height": 4.0,
+  "y_offset": 1.74,
+  "pad_height": 384,
+  "pad_width": 1280,
+  "nms_thresh": 0.0
+}

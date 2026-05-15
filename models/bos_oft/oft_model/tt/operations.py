@@ -100,8 +100,6 @@ def make_hs_mem_config_tile_aligned(device, input_nhw, channels, shard):
         )
     return sharded_mem_config, grid_size
 
-    return sharded_mem_config, grid_size
-
 
 def _nearest_32(value):
     return ((value + 31) // 32) * 32
@@ -113,23 +111,24 @@ class Conv:
         parameters,
         conv_args,
         *,
-        act_block_h=32,
-        activation=None,
-        deallocate=False,
         weight_dtype=ttnn.bfloat8_b,
         output_layout=ttnn.TILE_LAYOUT,
     ):
         self.weights = self._to_tt_weight(parameters.weight, weight_dtype)
-        self.bias = (
-            self._to_tt_bias(parameters.bias, weight_dtype) if getattr(parameters, "bias", None) is not None else None
-        )
+        try:
+            bias = parameters.bias
+        except (AttributeError, KeyError):
+            bias = None
+        self.bias = self._to_tt_bias(bias, weight_dtype) if bias is not None else None
         self.conv_args = conv_args
-        self.kernel_size = tuple(parameters.weight.shape[2:])
-        self.act_block_h = act_block_h
-        self.activation = activation
-        self.deallocate = deallocate
+        weight_shape = self._shape_to_tuple(self.weights.shape)
+        self.kernel_size = (weight_shape[2], weight_shape[3])
         self.weight_dtype = weight_dtype
         self.output_layout = output_layout
+
+    @staticmethod
+    def _shape_to_tuple(shape):
+        return tuple(int(shape[i]) for i in range(len(shape)))
 
     @staticmethod
     def _shard_config(shard):
@@ -142,36 +141,45 @@ class Conv:
 
     @staticmethod
     def _to_tt_weight(weight, dtype):
-        if isinstance(weight, ttnn.Tensor):
-            return weight
         storage_dtype = ttnn.bfloat16 if dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b) else dtype
-        return ttnn.from_torch(weight, dtype=storage_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+        if isinstance(weight, ttnn.Tensor):
+            weight = ttnn.to_torch(weight)
+
+        return ttnn.from_torch(
+            weight,
+            dtype=storage_dtype,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
 
     @staticmethod
     def _to_tt_bias(bias, dtype):
-        if isinstance(bias, ttnn.Tensor):
-            return bias
         storage_dtype = ttnn.bfloat16 if dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b) else dtype
-        return ttnn.from_torch(bias.reshape(1, 1, 1, -1), dtype=storage_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+        if isinstance(bias, ttnn.Tensor):
+            bias = ttnn.to_torch(bias)
+
+        return ttnn.from_torch(
+            bias.reshape(1, 1, 1, -1),
+            dtype=storage_dtype,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
 
     def __call__(self, device, input_tensor, shard):
         conv_config = ttnn.Conv2dConfig(
             weights_dtype=self.weight_dtype,
             output_layout=self.output_layout,
-            deallocate_activation=self.deallocate,
-            activation=self.activation,
             shard_layout=self._shard_config(shard),
         )
-        if self.act_block_h is not None:
-            conv_config.act_block_h_override = self.act_block_h
 
         compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
             fp32_dest_acc_en=True,
-            packer_l1_acc=False,
+            packer_l1_acc=True,
         )
-
+        # input_tensor = ttnn.to_memory_config(input_tensor, ttnn.DRAM_MEMORY_CONFIG) #test for topdown
         output, (out_h, out_w), (self.weights, self.bias) = ttnn.conv2d(
             input_tensor=input_tensor,
             weight_tensor=self.weights,
@@ -194,7 +202,7 @@ class Conv:
 
 
 class GroupNormL1:
-    def __init__(self, parameters, layer_args, dtype=ttnn.bfloat16, is_sliced=False):
+    def __init__(self, parameters, layer_args, dtype=ttnn.bfloat16):
         self.weight = parameters.weight
         self.bias = parameters.bias
         self.num_groups = layer_args.num_groups
@@ -216,7 +224,13 @@ class GroupNormL1:
         channels = self.channels
         self.num_groups = self.num_groups // num_splits
         self.channels = self.channels // num_splits
-
+        # self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        # device.arch(),
+        # math_fidelity=ttnn.MathFidelity.HiFi4,
+        # math_approx_mode=False,
+        # fp32_dest_acc_en=True,
+        # packer_l1_acc=True,
+        # )
         input_nhw = input_tensor.shape[2]
         channels = input_tensor.shape[3]
 
@@ -230,15 +244,12 @@ class GroupNormL1:
             sharded_mem_config.shard_spec.orientation,
         )
         input_mask_tensor = ttnn.create_group_norm_input_mask(
-            self.channels, self.num_groups, num_cores_across_channel, ttnn.bfloat16
+            self.channels,
+            self.num_groups,
+            num_cores_across_channel,
+            ttnn.bfloat16,
         )
-        input_mask_tensor = ttnn.to_device(input_mask_tensor, device, memory_config=ttnn.L1_MEMORY_CONFIG)
-        negative_input_mask_tensor = ttnn.create_group_norm_input_negative_mask(
-            self.channels, self.num_groups, num_cores_across_channel, ttnn.bfloat16
-        )
-        negative_input_mask_tensor = ttnn.to_device(
-            negative_input_mask_tensor, device, memory_config=ttnn.L1_MEMORY_CONFIG
-        )
+        input_mask_tensor = ttnn.to_device(input_mask_tensor, device)
         gamma = ttnn.create_group_norm_weight_bias_rm(self.weight, self.channels, num_cores_across_channel)
         beta = ttnn.create_group_norm_weight_bias_rm(self.bias, self.channels, num_cores_across_channel)
         gamma_t = ttnn.from_torch(
@@ -246,27 +257,24 @@ class GroupNormL1:
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=device,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         beta_t = ttnn.from_torch(
             beta,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=device,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         input_tensor = ttnn.to_memory_config(input_tensor, memory_config=sharded_mem_config)
-        if negative_input_mask_tensor and input_tensor.layout != ttnn.ROW_MAJOR_LAYOUT:
-            input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
-            input_tensor = ttnn.move(input_tensor)
 
         out = ttnn.group_norm(
             input_tensor,
             num_groups=self.num_groups,
             input_mask=input_mask_tensor,
-            negative_mask=negative_input_mask_tensor,
             weight=gamma_t,  # y = gamma * x + beta
             bias=beta_t,
+            memory_config=sharded_mem_config,
             core_grid=grid_size,
             inplace=True if input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT else False,
             epsilon=self.eps,
@@ -354,7 +362,6 @@ class GroupNormDram:
             input_mask=input_mask,
             weight=gamma_t,  # y = gamma * x + beta
             bias=beta_t,
-            # memory_config=ttnn.DRAM_MEMORY_CONFIG,
             output_layout=ttnn.TILE_LAYOUT,
             core_grid=grid_size,
             inplace=False,

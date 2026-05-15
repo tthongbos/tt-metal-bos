@@ -45,15 +45,25 @@ class TTBasicBlock:
         self.bn1 = GroupNormL1(parameters.bn1, layer_args.bn1, dtype=dtype)
         self.bn2 = GroupNormL1(parameters.bn2, layer_args.bn2, dtype=dtype)
         self.relu = Relu()
+        try:
+            downsample = parameters.downsample
+        except (AttributeError, KeyError):
+            downsample = None
 
-        self.downsample = hasattr(parameters, "downsample") and getattr(parameters, "downsample") is not None
+        self.downsample = downsample is not None
         if self.downsample:
-            self.downsample_conv = Conv(parameters.downsample[0], layer_args.downsample[0], weight_dtype=dtype)
-            self.downsample_bn = GroupNormL1(parameters.downsample[1], layer_args.downsample[1], dtype=dtype)
+            self.downsample_conv = Conv(downsample[0], layer_args.downsample[0], weight_dtype=dtype)
+            self.downsample_bn = GroupNormL1(downsample[1], layer_args.downsample[1], dtype=dtype)
 
     @staticmethod
     def _capture(x):
         return ttnn.to_torch(x).float()
+
+    def _call_bn(self, bn, device, shard, x, num_splits=1):
+        if isinstance(bn, GroupNormDram):
+            return bn(device, x, num_splits=num_splits)
+
+        return bn(device, shard, x, num_splits=num_splits)
 
     @staticmethod
     def _match_identity_to_out(identity, out):
@@ -75,7 +85,7 @@ class TTBasicBlock:
             outs["conv1"] = self._capture(out)
         # logger.info(f"Block id {self.block_id} with output in: {out.memory_config()} layout: {out.layout} shape: {out.shape}")
         # logger.info(f"Block id {self.block_id}: bn1 start")
-        out = self.bn1(device, shard, out, num_splits=num_splits)
+        out = self._call_bn(self.bn1, device, shard, out, num_splits=num_splits)
         if collect_intermediates:
             outs["grnorm1"] = self._capture(out)
             outs["grnorm"] = outs["grnorm1"]
@@ -98,14 +108,14 @@ class TTBasicBlock:
             outs["conv2"] = self._capture(out)
 
         # logger.info(f"Block id {self.block_id}: bn2 start")
-        out = self.bn2(device, shard, out, num_splits=num_splits)
+        out = self._call_bn(self.bn2, device, shard, x=out, num_splits=num_splits)
         if collect_intermediates:
             outs["grnorm2"] = self._capture(out)
         # logger.info(f"Block id {self.block_id} with output in: {out.memory_config()} layout: {out.layout} shape: {out.shape}")
         if self.downsample:
             # logger.info(f"Block id {self.block_id}: downsample start")
             identity, _, _ = self.downsample_conv(device, identity, shard)
-            identity = self.downsample_bn(device, shard, identity, num_splits=num_splits)
+            identity = self._call_bn(self.downsample_bn, device, shard, x=identity, num_splits=num_splits)
             if collect_intermediates:
                 outs["downsample"] = self._capture(identity)
             # logger.info(f"Block id {self.block_id} with output in: {identity.memory_config()} layout: {identity.layout} shape: {identity.shape}")
@@ -117,6 +127,12 @@ class TTBasicBlock:
             identity = ttnn.to_memory_config(identity, out.memory_config())
             out = ttnn.add(out, identity)
         elif shard == "BS":
+            if identity.layout != out.layout:
+                identity = ttnn.to_layout(identity, out.layout)
+            if identity.shape != out.shape:
+                identity = ttnn.reshape(identity, out.shape)
+            if identity.memory_config() != out.memory_config():
+                identity = ttnn.to_memory_config(identity, memory_config=out.memory_config())
             out = ttnn.add(out, identity)
 
         if collect_intermediates:
@@ -254,6 +270,7 @@ class TTResNet:
             num_splits=num_splits,
             collect_intermediates=collect_intermediates,
         )
+
         if collect_intermediates:
             outs["layer2"] = self._capture(feats8)
             outs["layer2_blocks"] = layer2_outs
@@ -273,7 +290,7 @@ class TTResNet:
             self.layer4,
             device,
             feats16,
-            shard,
+            shard="BS",
             num_splits=num_splits,
             collect_intermediates=collect_intermediates,
         )
@@ -283,11 +300,11 @@ class TTResNet:
 
         return self._to_dram(feats8), self._to_dram(feats16), self._to_dram(feats32), outs
 
-    def forward(self, device, x, *, num_splits=1, collect_intermediates=False):
+    def forward(self, device, x, *, num_splits=1, collect_intermediates=True):
         return self.forward_feature_pyramid(
             device,
             x,
-            shard="HS",
+            shard="BS",
             num_splits=num_splits,
             collect_intermediates=collect_intermediates,
         )

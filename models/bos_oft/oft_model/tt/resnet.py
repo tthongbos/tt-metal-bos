@@ -159,10 +159,10 @@ class TTResNet:
             device=device,
         )
 
-        self.layer1 = self._make_layer(parameters.layer1, layer_args.layer1, dtype=dtype)
-        self.layer2 = self._make_layer(parameters.layer2, layer_args.layer2, dtype=dtype)
-        self.layer3 = self._make_layer(parameters.layer3, layer_args.layer3, dtype=dtype)
-        self.layer4 = self._make_layer(parameters.layer4, layer_args.layer4, dtype=dtype)
+        self.layer1 = self._make_layer(parameters.layer1, layer_args.layer1, dtype=ttnn.float32)
+        self.layer2 = self._make_layer(parameters.layer2, layer_args.layer2, dtype=ttnn.float32)
+        self.layer3 = self._make_layer(parameters.layer3, layer_args.layer3, dtype=ttnn.float32)
+        self.layer4 = self._make_layer(parameters.layer4, layer_args.layer4, dtype=ttnn.float32)
 
     @staticmethod
     def _make_layer(parameters, layer_args, *, dtype):
@@ -260,6 +260,7 @@ class TTResNet:
             self.layer3,
             device,
             feats8,
+            shard="BS",
             num_splits=num_splits,
             collect_intermediates=collect_intermediates,
         )

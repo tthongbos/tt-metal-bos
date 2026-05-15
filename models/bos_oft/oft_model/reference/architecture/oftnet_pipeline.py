@@ -103,7 +103,7 @@ def run_full_pipeline(
     model.eval()
 
     with torch.no_grad():
-        scores, pos_offsets, dim_offsets, ang_offsets = model(image, calib, grid)
+        scores, pos_offsets, dim_offsets, ang_offsets, outs = model(image, calib, grid)
         objects, decoded = decode_oftnet_outputs(
             scores,
             pos_offsets,
