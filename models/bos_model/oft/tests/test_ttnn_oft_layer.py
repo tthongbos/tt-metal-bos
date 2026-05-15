@@ -30,7 +30,7 @@ def main():
     assert os.path.exists(kitti_root), f"Dataset path '{kitti_root}' does not exist."
     assert os.path.exists(split_file), f"Split text file '{split_file}' does not exist."
 
-    dataset = KittiObjectDataset(kitti_root, split, (79.0, 80.0), 0.5, 1.74)
+    dataset = KittiObjectDataset(kitti_root, split, (80.0, 80.0), 0.5, 1.74)
 
     with open("models/bos_model/oft/tests/test_configs/oft_test_params.json", "r") as f:
         test_parameters = json.load(f)
@@ -64,7 +64,7 @@ def main():
         # return visualize(ortho_feats_ttnn,  file_name="./tracer_demo/graph_oft.svg")
         features = torch.rand(1, 47, 156, 256)  # [B, H, W, C] ttnn type
         calib = calib
-        grid = make_grid((79.0, 80.0), (-40.0, -1.74, 0.0), 0.5).unsqueeze(0)
+        grid = make_grid((80.0, 80.0), (-40.0, -1.74, 0.0), 0.5).unsqueeze(0)
 
         # Calculate oft in tnnn
         ortho_feats_ttnn = ttnn_oft(features, calib, grid, device=device)
